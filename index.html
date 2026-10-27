@@ -374,6 +374,8 @@ const FLIP_CORNER={NW:"NW",NE:"SW",SW:"NE",SE:"SE"};
 const flipRoom=r=>({...r,x:r.y,y:r.x,w:r.d,d:r.w,...(r.chamfer?{chamfer:{...r.chamfer,corner:FLIP_CORNER[r.chamfer.corner]}}:{})});
 const flipRect=([x,y,w,d])=>[y,x,d,w];
 const SITE={deck:[35.5,41,28,26],pool:[41,46,22,11],spa:[58,58,6,6]};
+const BASE_FIELDS=['floor','wall','wallColor','trim','trimColor','ceiling','cabinet','cabinetColor','counter','backsplash','cabLF','island','vanity','vanityColor','shower','showerSf'];
+const baseOf=r=>Object.fromEntries(BASE_FIELDS.map(k=>[k,r[k]]));
 function houseRooms(){
   const L1=(n,t,x,y,w,d,e={})=>R(n,t,x,y,w,d,{level:1,...e}),L2=(n,t,x,y,w,d,e={})=>R(n,t,x,y,w,d,{level:2,...e});
   const dn={floor:'porc-lightgray',wall:'paint',wallColor:'#f1efe8',trim:'base-craft',trimColor:'#f1efe8',ceiling:'ceil-paint'};
@@ -407,12 +409,12 @@ function houseRooms(){
     L1('Primary bedroom','bedroom',52.22,1.9,15.01,19.63,{...dn,h:10.7,furn:{bed:'#b9b6b0',bedding:'#f2f0eb',wood:'#c9c3b8',chair:'#e8e4dc',rug:'#d9d6cf',accent:'#c9c3b8'}}),
     L1('Primary bath','bath',34.46,1.9,17.76,9.32,{...dn,h:13.7,vanity:'van-custom',vanityColor:'#f4f3ef',shower:'sh-porc',showerSf:140,ceiling:'ceil-tg',furn:{rug:'#dcd8d0'}}),
     L1('Primary closet','other',34.46,11.22,17.76,10.31,{...dn,h:9.8}),
-  ];
+  ].map(r=>({...r,base:baseOf(r)})); // today's finishes are the starting point: the budget begins at $0
 }
 const S={rooms:houseRooms(),settings:{height:10,demo:false,contingency:true},isSample:false,approx:true,savedAt:0,
   sel:null,tab:'room',walls:'full',furniture:true,pending:null,level:1};
 S.sel=S.rooms.find(r=>r.type==='living')?.id||S.rooms[0].id;
-const LS='hfs.v11';
+const LS='hfs.v12';
 const snapshot=()=>JSON.parse(JSON.stringify({rooms:S.rooms,settings:S.settings,isSample:S.isSample,approx:S.approx}));
 function applyState(st){
   if(!st||!Array.isArray(st.rooms)) return false;
@@ -432,22 +434,28 @@ function qty(r){
   return {A:Math.round(A),WA:Math.round(P*(r.h||S.settings.height)*.85),LF:Math.round(P*.9),
     cabLF:r.cabLF+(r.island?8:0),ctr:Math.round(r.cabLF*2.1+(r.island?34:0)),bs:Math.round(r.cabLF*1.5)};
 }
+/* The budget prices only what changes from the house as it is today (r.base). A room with no base
+   (one she adds herself) is priced in full. */
+const CAB_PAINT={name:'Paint existing cabinets',low:60,high:120};
 function roomLines(r){
-  const q=qty(r), L=[];
+  const q=qty(r), L=[], b=r.base, ch=(...ks)=>!b||ks.some(k=>String(r[k]).toLowerCase()!==String(b[k]).toLowerCase());
   const add=(cat,o,n,unit)=>{ if(o&&o.high>0&&n>0) L.push({cat,name:o.name,n,unit,low:o.low*n,high:o.high*n}); };
-  if(S.settings.demo) L.push({cat:'Tear-out',name:'Remove existing flooring',n:q.A,unit:'SF',low:1.5*q.A,high:3*q.A});
-  add('Flooring',BY.floor[r.floor],q.A,'SF');
-  add('Walls',BY.wall[r.wall],q.WA,'SF');
-  add('Trim',BY.trim[r.trim],q.LF,'LF');
-  add('Ceilings',BY.ceiling[r.ceiling],q.A,'SF');
+  if(ch('floor')){
+    if(S.settings.demo) L.push({cat:'Tear-out',name:'Remove existing flooring',n:q.A,unit:'SF',low:1.5*q.A,high:3*q.A});
+    add('Flooring',BY.floor[r.floor],q.A,'SF');
+  }
+  if(ch('wall','wallColor')) add('Walls',BY.wall[r.wall],q.WA,'SF');
+  if(ch('trim','trimColor')) add('Trim',BY.trim[r.trim],q.LF,'LF');
+  if(ch('ceiling')) add('Ceilings',BY.ceiling[r.ceiling],q.A,'SF');
   if(r.type==='kitchen'){
-    add('Cabinets',BY.cabinet[r.cabinet],q.cabLF,'LF');
-    add('Countertops',BY.counter[r.counter],q.ctr,'SF');
-    add('Backsplash',BY.backsplash[r.backsplash],q.bs,'SF');
+    if(ch('cabinet','cabLF','island')) add('Cabinets',BY.cabinet[r.cabinet],q.cabLF,'LF');
+    else if(ch('cabinetColor')) add('Cabinets',CAB_PAINT,q.cabLF,'LF');
+    if(ch('counter','cabLF','island')) add('Countertops',BY.counter[r.counter],q.ctr,'SF');
+    if(ch('backsplash','cabLF')) add('Backsplash',BY.backsplash[r.backsplash],q.bs,'SF');
   }
   if(r.type==='bath'){
-    add('Vanities',BY.vanity[r.vanity],1,'EA');
-    add('Shower tile',BY.shower[r.shower],r.showerSf,'SF');
+    if(ch('vanity','vanityColor')) add('Vanities',BY.vanity[r.vanity],1,'EA');
+    if(ch('shower','showerSf')) add('Shower tile',BY.shower[r.shower],r.showerSf,'SF');
   }
   return L;
 }
@@ -1235,7 +1243,7 @@ function persist(){
   remoteTimer=setTimeout(async function push(){
     if(remoteBusy){remoteTimer=setTimeout(push,800);return}
     remoteBusy=true;
-    try{await db.doc('workspace/house11').set({state:snapshot(),savedAt:S.savedAt})}catch(e){if(e?.code==='invalid_argument')dbWritable=false}
+    try{await db.doc('workspace/house12').set({state:snapshot(),savedAt:S.savedAt})}catch(e){if(e?.code==='invalid_argument')dbWritable=false}
     remoteBusy=false;
   },2000);
 }
@@ -1246,7 +1254,7 @@ async function initDb(){
   try{db=await window.claude?.use?.('db')??null}catch{db=null}
   if(!db)return;
   try{
-    const snap=await db.doc('workspace/house11').get();
+    const snap=await db.doc('workspace/house12').get();
     if(snap.exists){const d=snap.data();if(d?.state&&(d.savedAt||0)>(S.savedAt||0)&&applyState({...d.state,savedAt:d.savedAt})){build();camView('angle');render()}}
   }catch{}
   db.collection('designs').orderBy('savedAt','desc').limit(200).onSnapshot(
@@ -1317,7 +1325,7 @@ function budgetTab(){
     <tbody>${t.rooms.map(x=>`<tr data-act="pick" data-id="${x.r.id}" tabindex="0"><td>${esc(x.r.name)}</td><td class="n">${fmtN(x.r.w*x.r.d)}</td><td class="n">${fmtR(x.low,x.high)}</td></tr>`).join('')}</tbody>
     <tfoot><tr><td>Total${t.cont?' with 10%':''}</td><td class="n">${fmtN(t.sf)}</td><td class="n">${fmtR(t.low,t.high)}</td></tr></tfoot>
   </table></div></section>
-  <p class="foot">Prices are installed (materials and labor) for Dallas–Fort Worth in 2026, using typical contractor ranges. Wall area is the room perimeter times ceiling height, less 15% for doors and windows. Use these to plan and compare looks, then get real bids before committing.</p>`;
+  <p class="foot">The budget starts at $0 and only prices what you change from the house as it is today. Prices are installed (materials and labor) for Dallas–Fort Worth in 2026, using typical contractor ranges. Wall area is the room perimeter times ceiling height, less 15% for doors and windows. Use these to plan and compare looks, then get real bids before committing.</p>`;
 }
 function layoutTab(){
   return `<p class="note">${S.isSample?'This is a <b>sample 3-bed, 2-bath plan</b> to try things on. ':S.approx?'Room sizes come from the 5509 Weatherby listing and the floor areas from the Collin CAD record. <b>Downstairs placement follows your walkthrough video</b>; upstairs follows the listing photos. Walls may be a foot or two off, and closets, stairs and the garage are left out. ':''}Each room is a rectangle in feet, measured from the front-left corner of the house (X runs left to right, Y runs front to back). Doorways appear on their own where rooms touch. A bedroom and bath connect when their names match, like “Bedroom 3” and “Bath 3”.</p>
